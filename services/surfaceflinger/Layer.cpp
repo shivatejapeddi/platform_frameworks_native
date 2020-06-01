@@ -119,6 +119,7 @@ Layer::Layer(const LayerCreationArgs& args)
     mCurrentState.metadata = args.metadata;
     mCurrentState.shadowRadius = 0.f;
     mCurrentState.treeHasFrameRateVote = false;
+    mCurrentState.fixedTransformHint = ui::Transform::ROT_INVALID;
 
     // drawing state & current state are identical
     mDrawingState = mCurrentState;
@@ -1349,6 +1350,18 @@ bool Layer::setShadowRadius(float shadowRadius) {
     return true;
 }
 
+bool Layer::setFixedTransformHint(ui::Transform::RotationFlags fixedTransformHint) {
+    if (mCurrentState.fixedTransformHint == fixedTransformHint) {
+        return false;
+    }
+
+    mCurrentState.sequence++;
+    mCurrentState.fixedTransformHint = fixedTransformHint;
+    mCurrentState.modified = true;
+    setTransactionFlags(eTransactionNeeded);
+    return true;
+}
+
 void Layer::updateTreeHasFrameRateVote() {
     const auto traverseTree = [&](const LayerVector::Visitor& visitor) {
         auto parent = getParent();
@@ -1476,19 +1489,19 @@ uint32_t Layer::getEffectiveUsage(uint32_t usage) const {
 }
 
 void Layer::updateTransformHint(const sp<const DisplayDevice>& display) const {
-    uint32_t orientation = 0;
+    ui::Transform::RotationFlags transformHint = ui::Transform::ROT_0;
     // Disable setting transform hint if the debug flag is set.
     if (!mFlinger->mDebugDisableTransformHint) {
         // The transform hint is used to improve performance, but we can
         // only have a single transform hint, it cannot
         // apply to all displays.
         const ui::Transform& planeTransform = display->getTransform();
-        orientation = planeTransform.getOrientation();
-        if (orientation & ui::Transform::ROT_INVALID) {
-            orientation = 0;
+        transformHint = static_cast<ui::Transform::RotationFlags>(planeTransform.getOrientation());
+        if (transformHint & ui::Transform::ROT_INVALID) {
+            transformHint = ui::Transform::ROT_0;
         }
     }
-    setTransformHint(orientation);
+    setTransformHint(transformHint);
 }
 
 // ----------------------------------------------------------------------------
@@ -1548,7 +1561,9 @@ LayerDebugInfo Layer::getLayerDebugInfo() const {
 void Layer::miniDumpHeader(std::string& result) {
     result.append("-------------------------------");
     result.append("-------------------------------");
-    result.append("-----------------------------\n");
+    result.append("-------------------------------");
+    result.append("-------------------------------");
+    result.append("---------\n");
     result.append(" Layer name\n");
     result.append("           Z | ");
     result.append(" Window Type | ");
@@ -1556,10 +1571,24 @@ void Layer::miniDumpHeader(std::string& result) {
     result.append(" Comp Type | ");
     result.append(" Transform | ");
     result.append("  Disp Frame (LTRB) | ");
-    result.append("         Source Crop (LTRB)\n");
+    result.append("         Source Crop (LTRB) | ");
+    result.append("    Frame Rate (Explicit)\n");
     result.append("-------------------------------");
     result.append("-------------------------------");
-    result.append("-----------------------------\n");
+    result.append("-------------------------------");
+    result.append("-------------------------------");
+    result.append("---------\n");
+}
+
+std::string Layer::frameRateCompatibilityString(Layer::FrameRateCompatibility compatibility) {
+    switch (compatibility) {
+        case FrameRateCompatibility::Default:
+            return "Default";
+        case FrameRateCompatibility::ExactOrMultiple:
+            return "ExactOrMultiple";
+        case FrameRateCompatibility::NoVote:
+            return "NoVote";
+    }
 }
 
 void Layer::miniDump(std::string& result, const sp<DisplayDevice>& displayDevice) const {
@@ -1596,12 +1625,21 @@ void Layer::miniDump(std::string& result, const sp<DisplayDevice>& displayDevice
     const Rect& frame = outputLayerState.displayFrame;
     StringAppendF(&result, "%4d %4d %4d %4d | ", frame.left, frame.top, frame.right, frame.bottom);
     const FloatRect& crop = outputLayerState.sourceCrop;
-    StringAppendF(&result, "%6.1f %6.1f %6.1f %6.1f\n", crop.left, crop.top, crop.right,
+    StringAppendF(&result, "%6.1f %6.1f %6.1f %6.1f | ", crop.left, crop.top, crop.right,
                   crop.bottom);
+    if (layerState.frameRate.rate != 0 ||
+        layerState.frameRate.type != FrameRateCompatibility::Default) {
+        StringAppendF(&result, "% 6.2ffps %15s\n", layerState.frameRate.rate,
+                      frameRateCompatibilityString(layerState.frameRate.type).c_str());
+    } else {
+        StringAppendF(&result, "\n");
+    }
 
-    result.append("- - - - - - - - - - - - - - - -");
-    result.append("- - - - - - - - - - - - - - - -");
-    result.append("- - - - - - - - - - - - - - -\n");
+    result.append("- - - - - - - - - - - - - - - - ");
+    result.append("- - - - - - - - - - - - - - - - ");
+    result.append("- - - - - - - - - - - - - - - - ");
+    result.append("- - - - - - - - - - - - - - - - ");
+    result.append("- - -\n");
 }
 
 void Layer::dumpFrameStats(std::string& result) const {
@@ -2067,6 +2105,16 @@ half Layer::getAlpha() const {
 
     half parentAlpha = (p != nullptr) ? p->getAlpha() : 1.0_hf;
     return parentAlpha * getDrawingState().color.a;
+}
+
+ui::Transform::RotationFlags Layer::getFixedTransformHint() const {
+    ui::Transform::RotationFlags fixedTransformHint = mCurrentState.fixedTransformHint;
+    if (fixedTransformHint != ui::Transform::ROT_INVALID) {
+        return fixedTransformHint;
+    }
+    const auto& p = mCurrentParent.promote();
+    if (!p) return fixedTransformHint;
+    return p->getFixedTransformHint();
 }
 
 half4 Layer::getColor() const {

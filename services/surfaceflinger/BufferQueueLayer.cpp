@@ -62,8 +62,9 @@ void BufferQueueLayer::onLayerDisplayed(const sp<Fence>& releaseFence) {
     }
 }
 
-void BufferQueueLayer::setTransformHint(uint32_t orientation) const {
-    mConsumer->setTransformHint(orientation);
+void BufferQueueLayer::setTransformHint(ui::Transform::RotationFlags displayTransformHint) const {
+    BufferLayer::setTransformHint(displayTransformHint);
+    mConsumer->setTransformHint(mTransformHint);
 }
 
 std::vector<OccupancyTracker::Segment> BufferQueueLayer::getOccupancyHistory(bool forceFlush) {
@@ -132,6 +133,7 @@ bool BufferQueueLayer::shouldPresentNow(nsecs_t expectedPresentTime) const {
         bufferStats.queued_frames = getQueuedFrameCount();
         bufferStats.auto_timestamp = mQueueItems[0].mIsAutoTimestamp;
         bufferStats.timestamp = mQueueItems[0].mTimestamp;
+        bufferStats.dequeue_latency = 0;
         isDue = mFlinger->mSmoMo->ShouldPresentNow(bufferStats, expectedPresentTime);
     }
 
@@ -447,6 +449,7 @@ void BufferQueueLayer::onFrameAvailable(const BufferItem& item) {
         bufferStats.queued_frames = getQueuedFrameCount();
         bufferStats.auto_timestamp = item.mIsAutoTimestamp;
         bufferStats.timestamp = item.mTimestamp;
+        bufferStats.dequeue_latency = 0;
         mFlinger->mSmoMo->CollectLayerStats(bufferStats);
     }
 
@@ -542,10 +545,6 @@ void BufferQueueLayer::onFirstRef() {
     // BufferQueueCore::mMaxDequeuedBufferCount is default to 1
     if (!mFlinger->isLayerTripleBufferingDisabled()) {
         mProducer->setMaxDequeuedBufferCount(2);
-    }
-
-    if (const auto display = mFlinger->getDefaultDisplayDeviceLocked()) {
-        updateTransformHint(display);
     }
 
     if (mFlinger->mLayerExt) {

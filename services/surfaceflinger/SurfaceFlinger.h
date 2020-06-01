@@ -89,6 +89,12 @@ namespace smomo {
 class SmomoIntf;
 } // namespace smomo
 
+namespace composer {
+class ComposerExtnIntf;
+class ComposerExtnLib;
+class FrameSchedulerIntf;
+} // namespace composer
+
 using smomo::SmomoIntf;
 
 namespace composer {
@@ -135,7 +141,7 @@ enum {
     eTransactionNeeded = 0x01,
     eTraversalNeeded = 0x02,
     eDisplayTransactionNeeded = 0x04,
-    eDisplayLayerStackChanged = 0x08,
+    eTransformHintUpdateNeeded = 0x08,
     eTransactionFlushNeeded = 0x10,
     eTransactionMask = 0x1f,
 };
@@ -677,6 +683,7 @@ private:
     void commitInputWindowCommands() REQUIRES(mStateLock);
     void setInputWindowsFinished();
     void updateCursorAsync();
+    void updateFrameScheduler();
     void initScheduler(DisplayId primaryDisplayId);
 
     /* handlePageFlip - latch a new buffer if available and compute the dirty
@@ -745,8 +752,7 @@ private:
 
     status_t createBufferStateLayer(const sp<Client>& client, std::string name, uint32_t w,
                                     uint32_t h, uint32_t flags, LayerMetadata metadata,
-                                    sp<IBinder>* outHandle, uint32_t* outTransformHint,
-                                    sp<Layer>* outLayer);
+                                    sp<IBinder>* outHandle, sp<Layer>* outLayer);
 
     status_t createEffectLayer(const sp<Client>& client, std::string name, uint32_t w, uint32_t h,
                                uint32_t flags, LayerMetadata metadata, sp<IBinder>* outHandle,
@@ -771,7 +777,7 @@ private:
     status_t addClientLayer(const sp<Client>& client, const sp<IBinder>& handle,
                             const sp<IGraphicBufferProducer>& gbc, const sp<Layer>& lbc,
                             const sp<IBinder>& parentHandle, const sp<Layer>& parentLayer,
-                            bool addToCurrentState);
+                            bool addToCurrentState, uint32_t* outTransformHint);
 
     // Traverse through all the layers and compute and cache its bounds.
     void computeLayerBounds();
@@ -904,13 +910,13 @@ private:
             const DisplayDeviceState& state,
             const sp<compositionengine::DisplaySurface>& displaySurface,
             const sp<IGraphicBufferProducer>& producer);
-    void processDisplayChangesLocked();
+    void processDisplayChangesLocked() REQUIRES(mStateLock);
     void processDisplayAdded(const wp<IBinder>& displayToken, const DisplayDeviceState& state);
     void processDisplayRemoved(const wp<IBinder>& displayToken);
     void processDisplayChanged(const wp<IBinder>& displayToken,
                                const DisplayDeviceState& currentState,
-                               const DisplayDeviceState& drawingState);
-    void processDisplayHotplugEventsLocked();
+                               const DisplayDeviceState& drawingState) REQUIRES(mStateLock);
+    void processDisplayHotplugEventsLocked() REQUIRES(mStateLock);
 
     void dispatchDisplayHotplugEvent(PhysicalDisplayId displayId, bool connected);
 
@@ -1301,6 +1307,12 @@ private:
      * Misc
      */
 
+    std::optional<ActiveConfigInfo> getDesiredActiveConfig() EXCLUDES(mActiveConfigLock) {
+        std::lock_guard<std::mutex> lock(mActiveConfigLock);
+        if (mDesiredActiveConfigChanged) return mDesiredActiveConfig;
+        return std::nullopt;
+    }
+
     std::mutex mActiveConfigLock;
     // This bit is set once we start setting the config. We read from this bit during the
     // process. If at the end, this bit is different than mDesiredActiveConfig, we restart
@@ -1343,7 +1355,8 @@ private:
     // This should only be accessed on the main thread.
     nsecs_t mFrameStartTime = 0;
 
-    std::unique_ptr<RefreshRateOverlay> mRefreshRateOverlay;
+    void enableRefreshRateOverlay(bool enable);
+    std::unique_ptr<RefreshRateOverlay> mRefreshRateOverlay GUARDED_BY(mStateLock);
 
     // Flag used to set override allowed display configs from backdoor
     bool mDebugDisplayConfigSetByBackdoor = false;
@@ -1397,6 +1410,8 @@ private:
     void *mFrameExtnLibHandle = nullptr;
     bool (*mCreateFrameExtnFunc)(FrameExtnIntf **interface) = nullptr;
     bool (*mDestroyFrameExtnFunc)(FrameExtnIntf *interface) = nullptr;
+    composer::ComposerExtnIntf *mComposerExtnIntf = nullptr;
+    composer::FrameSchedulerIntf *mFrameSchedulerExtnIntf = nullptr;
 };
 
 } // namespace android
