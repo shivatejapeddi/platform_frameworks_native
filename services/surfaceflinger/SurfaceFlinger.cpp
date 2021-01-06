@@ -2123,7 +2123,7 @@ void SurfaceFlinger::updateFrameScheduler() NO_THREAD_SAFETY_ANALYSIS {
         return;
     }
 
-    const nsecs_t period = getVsyncPeriod();
+    const nsecs_t period = mRefreshRateConfigs->getCurrentRefreshRate().getVsyncPeriod();
     mScheduler->resyncToHardwareVsync(true, period, true /* force resync */);
     if (timeStamp > 0) {
         bool periodFlushed = false;
@@ -2836,12 +2836,12 @@ void SurfaceFlinger::updateVsyncSource()
     } else if (mNextVsyncSource && (mActiveVsyncSource == NULL)) {
         mScheduler->onScreenAcquired(mAppConnectionHandle);
         bool isPrimary = mNextVsyncSource->isPrimary();
-        nsecs_t vsync = (isPrimary && (mVsyncPeriod > 0)) ? mVsyncPeriod : getVsyncPeriod();
+        nsecs_t vsync = (isPrimary && (mVsyncPeriod > 0)) ? mVsyncPeriod : mRefreshRateConfigs->getCurrentRefreshRate().getVsyncPeriod();
         mScheduler->resyncToHardwareVsync(true, vsync);
     } else if ((mNextVsyncSource != NULL) &&
         (mActiveVsyncSource != NULL)) {
         // Switch vsync to the new source
-        mScheduler->resyncToHardwareVsync(true, getVsyncPeriod());
+        mScheduler->resyncToHardwareVsync(true, mRefreshRateConfigs->getCurrentRefreshRate().getVsyncPeriod());
     }
 }
 
